@@ -1,54 +1,97 @@
 import pandas as pd
-import geopandas as gpd
 import json
+import re
 
-# FIX 1: Add low_memory=False to handle mixed data types
-ridership_df = pd.read_csv('ridership.csv', low_memory=False)
+print("1. Loading CSV...")
+df = pd.read_csv("new_ridership.csv")
 
-# Group and convert to GeoDataFrame
-station_rollups = ridership_df.groupby(['station_complex_id', 'latitude', 'longitude'])['ridership'].apply(list).reset_index()
-stations_gdf = gpd.GeoDataFrame(
-    station_rollups, 
-    geometry=gpd.points_from_xy(station_rollups.longitude, station_rollups.latitude),
-    crs="EPSG:4326"
-)
+df['ridership'] = pd.to_numeric(df['ridership'], errors='coerce').fillna(0)
 
-# Load routes
-routes_gdf = gpd.read_file('routes.geojson') 
-routes_gdf = routes_gdf.to_crs("EPSG:4326")
+# Convert timestamps
+df['transit_timestamp'] = pd.to_datetime(df['transit_timestamp'])
 
-# FIX 2: Project both to EPSG:2263 (NYC State Plane in feet) for accurate distance math
-stations_proj = stations_gdf.to_crs("EPSG:2263")
-routes_proj = routes_gdf.to_crs("EPSG:2263")
+print("2. Aggregating hourly totals...")
+hourly_df = df.groupby(
+    ['station_complex_id', 'station_complex', 'latitude', 'longitude', 'transit_timestamp']
+)['ridership'].sum().reset_index()
 
-# Perform the spatial join. max_distance is now in FEET. (500 feet is a good snap radius)
-stations_with_routes = gpd.sjoin_nearest(stations_proj, routes_proj, how="left", max_distance=500)
+print("3. Pivoting timeline into arrays...")
+pivot_df = hourly_df.pivot(
+    index=['station_complex_id', 'station_complex', 'latitude', 'longitude'],
+    columns='transit_timestamp',
+    values='ridership'
+).fillna(0)
 
-# Convert back to EPSG:4326 so D3 can map it correctly
-stations_with_routes = stations_with_routes.to_crs("EPSG:4326")
+pivot_df = pivot_df.sort_index(axis=1)
+pivot_df['ridership_array'] = pivot_df.values.tolist()
+pivot_df = pivot_df.reset_index()
 
-nested_data = []
+print("4. Extracting train lines & calculating weights...")
 
-# FIX 3: Use the DataFrame index instead of 'Object ID'
-# Use the DataFrame index instead of 'Object ID'
-for idx, route in routes_gdf.iterrows():
-    route_stations = stations_with_routes[stations_with_routes['index_right'] == idx]
+# Approximate peak Trains Per Hour (tph) for frequency-based splitting
+TRAIN_WEIGHTS = {
+    '1': 15, '2': 12, '3': 12, 
+    '4': 15, '5': 12, '6': 15, 
+    '7': 22, 
+    'A': 15, 'C': 8, 'E': 12, 
+    'B': 8, 'D': 12, 'F': 15, 'M': 8, 
+    'N': 10, 'Q': 10, 'R': 10, 'W': 8, 
+    'J': 12, 'Z': 6, 
+    'L': 15, 'G': 8,
+    'S': 12, 'FS': 12, 'GS': 12, 'SIR': 4 # Including shuttles just in case
+}
+
+def extract_lines(station_name):
+    # Find ALL parentheses in the string
+    matches = re.findall(r'\((.*?)\)', str(station_name))
+    if matches:
+        # Grab only the very last one, which contains the train letters
+        last_match = matches[-1]
+        lines = [line.strip() for line in last_match.split(',')]
+        
+        # Reroute general 'S' to the map's 'ST' (Times Square Shuttle)
+        return ['ST' if line == 'S' else line for line in lines]
+    return []
+
+pivot_df['lines'] = pivot_df['station_complex'].apply(extract_lines)
+
+stations_by_line = {}
+for _, row in pivot_df.iterrows():
+    lines = row['lines']
     
-    # FIX: Isolate only the specific columns D3 needs. 
-    # This drops the problematic ':created_at' timestamp and shrinks the file size.
-    clean_stations = route_stations[['station_complex_id', 'latitude', 'longitude', 'ridership']]
+    # Calculate the total "weight" of all trains servicing this station
+    total_station_weight = sum([TRAIN_WEIGHTS.get(line, 10) for line in lines])
     
-    feature = {
-        "type": "Feature",
-        "geometry": route.geometry.__geo_interface__,
-        "properties": {
-            "service_name": route.get('Service Name', 'Unknown'),
-            "stations": clean_stations.to_dict('records')
+    for line in lines:
+        # Calculate this specific train's percentage of the station traffic
+        line_weight = TRAIN_WEIGHTS.get(line, 10)
+        ratio = line_weight / total_station_weight if total_station_weight > 0 else (1 / len(lines))
+        
+        # Multiply the entire array by this train's ratio
+        proportional_ridership = [round(float(val) * ratio) for val in row['ridership_array']]
+        
+        station_dict = {
+            "station_complex_id": str(row['station_complex_id']),
+            "name": row['station_complex'],
+            "latitude": row['latitude'],
+            "longitude": row['longitude'],
+            "ridership": proportional_ridership
         }
-    }
-    nested_data.append(feature)
+        
+        if line not in stations_by_line:
+            stations_by_line[line] = []
+        stations_by_line[line].append(station_dict)
 
-with open('d3_subway_data.geojson', 'w') as f:
-    json.dump({"type": "FeatureCollection", "features": nested_data}, f)
-    
-print("Successfully generated d3_subway_data.geojson!")
+print("5. Injecting proportionally split data into GeoJSON...")
+with open("final_final_d3_subway_data.geojson", "r") as f:
+    geojson_data = json.load(f)
+
+for feature in geojson_data["features"]:
+    line_letter = feature["properties"].get("service")
+    if line_letter:
+        feature["properties"]["stations"] = stations_by_line.get(line_letter, [])
+
+with open("final_d3_subway_data4.geojson", "w") as f:
+    json.dump(geojson_data, f)
+
+print("Done! Ridership is now proportionally split based on train frequency.")

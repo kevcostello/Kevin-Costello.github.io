@@ -103,6 +103,76 @@
             transform: translate(-50%, -100%); 
             margin-top: -15px; 
         }
+        #bottom-timeline {
+            position: absolute;
+            bottom: 30px;
+            left: 50%; /* Center the left edge */
+            transform: translateX(-50%); /* Pull it back by exactly half its width */
+            width: 90%;
+            box-sizing: border-box; /* Prevents padding from breaking the 90% width */
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            font-family: sans-serif;
+            z-index: 10;
+            display: none;
+        }
+
+        #time-display {
+            text-align: center;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 25px;
+            color: #333;
+            background-color: #111;
+        }
+
+        /* Container for the dynamic text annotations */
+        .annotation-track {
+            position: relative;
+            width: 100%;
+            height: 20px;
+        }
+        #tick-track {
+            position: relative;
+            width: 100%;
+            height: 0; 
+        }
+
+        .tick-mark {
+            position: absolute;
+            width: 3px;          /* Thickness */
+            height: 14px;        
+            top: 5px;            
+            transform: translateX(-50%); /* Keeps it centered */
+            z-index: 5;          /* Places it under the slider, but over the track */
+            pointer-events: none;
+            border-radius: 2px;
+        }
+
+        /* Hardcode the system colors, we'll do the Line Peak color in JS */
+        .busiest-bg { background-color: #EE352E; } 
+        .quietest-bg { background-color: #0039A6; }
+        
+        .marker {
+            position: absolute;
+            font-size: 12px;
+            font-weight: 600;
+            pointer-events: none;
+            white-space: nowrap; /* Prevents text from stacking and shifting off-center */
+            text-align: center;
+        }
+
+        .busiest { color: #EE352E; } /* MTA Red */
+        .quietest { color: #0039A6; } /* MTA Blue */
+        .line-peak { color: #00933C; font-size: 14px; }
+
+        input[type="range"] {
+            width: 100%;
+            margin-top: 5px;
+            cursor: pointer;
+        }
         .tooltip-bullet {
             display: inline-block;
             width: 12px;
@@ -174,13 +244,45 @@
 <body>
     <div id="dashboard">
         <div id="sidebar"></div>
-        <div id="viz-container"></div>
+        <div id="map-wrapper" style="position: relative; width: 100%; height: 80vh;">
+            
+            <!-- Your existing D3 SVG -->
+            <svg id="viz-container" width="100%" height="100%"></svg>
+
+            <!-- New Bottom Timeline Overlay -->
+            <div id="bottom-timeline">
+                <div id="time-display">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                        <span id="slider-day" style="font-weight: bold; color: #fff; font-size: 16px;">Monday</span>
+                        <span id="slider-time" style="font-weight: bold; color: #ff3366; font-size: 16px;">12:00 AM</span>
+                    </div>
+                </div>
+                
+                <!-- Annotation layer floats just above the slider -->
+                <div class="annotation-track">
+                    <div id="marker-min" class="marker quietest">↓ Lowest Volume</div>
+                    <div id="marker-max" class="marker busiest">↑ Highest Volume</div>
+                    <div id="marker-line-max" class="marker line-peak">★ Line Peak</div>
+                </div>
+                <div id="tick-track">
+                    <div id="tick-min" class="tick-mark quietest-bg"></div>
+                    <div id="tick-max" class="tick-mark busiest-bg"></div>
+                    <div id="tick-line-max" class="tick-mark"></div>
+                </div>
+                <input type="range" id="timeSlider" min="0" max="166" value="0" step="1">
+            </div>
+        </div>
+        </div>
+
     </div>
     <div id="footer">
         <div>Sources: NYC Open Data; 
             <a href="https://data.ny.gov/Transportation/MTA-Subway-Hourly-Ridership-Beginning-2025/5wq4-mkjj/about_data" target="_blank">MTA Subway Ridership</a> - 
             <a href="https://data.ny.gov/Transportation/MTA-Subway-Service-Lines/s692-irgq/about_data" target="_blank">MTA Subway Service Lines </a></div>
+        <div>*Note: SIR and Shuttle trains ommited due to artificial low ridership from lack of turnstile data.</div>
+        <div>*Note: Official MTA statements report total ridership numbers closer to 26 million. Current data fails to account for fare evasion estimates, and in-station transfers.</div>
         <div>Created with D3.js</div>
+        
     </div>
     <script src="main.js"></script>
 
