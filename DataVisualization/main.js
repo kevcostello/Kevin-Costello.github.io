@@ -2,6 +2,9 @@
 
 const state = { scene: 1, currentHour: 0 };
 let systemTotalRiders = 0;
+let maxStationHourlyRiders = 0;
+let stationHeatScale;
+let stationRadiusScale;
 let heatScale; 
 
 const width = 1000;
@@ -18,6 +21,7 @@ const zoomLayer = svg.append("g").attr("id", "zoom-layer");
 // map layer goes inside zoom layer
 const mapLayer = zoomLayer.append("g").attr("id", "osm-background");
 const subwayLayer = zoomLayer.append("g").attr("id", "subway-layer");
+const segmentLayer = zoomLayer.append("g").attr("id", "segment-layer");
 
 // get background map projection
 const projection = d3.geoMercator()
@@ -90,10 +94,10 @@ function getLineColor(trainLetter) {
 
 const lineOffsets = {
     "A": [8, 8], "C": [4, 4], "E": [-4, -4],
-    "N": [0, 0], "Q": [4, 4], "R": [8, 8], "W": [-4, -4],
+    "N": [0, 0], "Q": [4, 4], "R": [7, 7], "W": [-4, -4],
     "1": [0, 0], "2": [4, 4], "3": [-4, -4],
     "4": [0, 0], "5": [8, 8], "6": [-4, -4],
-    "B": [0, 0], "D": [6, 6], "F": [-4, -4], "M": [8, 8],
+    "B": [0, 0], "D": [6, 6], "F": [-6, -6], "M": [9, 9],
     "J": [-4, -4], "Z": [4, 4],
 };
 
@@ -110,6 +114,12 @@ const tooltip = d3.select("body").append("div")
 // --- Draw Subway Lines ----
 d3.json("final_d3_subway_data4.geojson").then(subwayData => {
     
+    // Filter out Shuttles
+    const excludedLines = ["SIR", "ST", "SF", "SR", "FS", "GS"];
+    subwayData.features = subwayData.features.filter(route => {
+        return !excludedLines.includes(route.properties.service);
+    });
+
     console.log("First Train Line Properties:", subwayData.features[0].properties);
     
     // Globals
@@ -123,10 +133,15 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
     let busiestSingleLine = "";
     let busiestSingleLineIndex = 0;
 
+    let lowestLineValley = Infinity; 
+    let quietestSingleLine = "";
+    let quietestSingleLineIndex = 0;
+
     // Master Aggregation Loop
     subwayData.features.forEach(route => {
+
         const trainLetter = route.properties.service;
-        
+
         // Initialize arrays for this specific map segment
         route.properties.lineTotal = 0;
         route.properties.hourlyTotals = new Array(167).fill(0);
@@ -137,6 +152,12 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
 
             route.properties.stations.forEach(station => {
                 if (station.ridership && Array.isArray(station.ridership)) {
+
+                    const maxHourForThisStation = d3.max(station.ridership) || 0;
+                    if (maxHourForThisStation > maxStationHourlyRiders) {
+                        maxStationHourlyRiders = maxHourForThisStation;
+                    }
+
                     station.ridership.forEach((val, i) => {
                         // Apply to this specific map segment so the heatmap colors work
                         route.properties.lineTotal += val;
@@ -160,6 +181,13 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
                 busiestSingleLine = trainLetter;
                 busiestSingleLineIndex = route.properties.hourlyTotals.indexOf(maxHourForLine);
             }
+
+            const minHourForLine = d3.min(route.properties.hourlyTotals);
+            if (minHourForLine < lowestLineValley) {
+                lowestLineValley = minHourForLine;
+                quietestSingleLine = trainLetter;
+                quietestSingleLineIndex = route.properties.hourlyTotals.indexOf(minHourForLine);
+            }
         }
     });
 
@@ -174,33 +202,77 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
     const maxPercent = (maxIndex / 166) * 100;
     const minPercent = (minIndex / 166) * 100;
     const lineMaxPercent = (busiestSingleLineIndex / 166) * 100;
+    const lineMinPercent = (quietestSingleLineIndex / 166) * 100;
+
+    const weekendTotals = systemHourlyTotals.slice(119);
+    const weekendMaxVal = d3.max(weekendTotals);
+    const weekendMaxIndex = systemHourlyTotals.indexOf(weekendMaxVal, 119);
+    let steepestDrop = 0;
+    let steepestDropIndex = 0;
+    for (let i = 1; i < systemHourlyTotals.length; i++) {
+        const drop = systemHourlyTotals[i - 1] - systemHourlyTotals[i];
+        if (drop > steepestDrop) {
+            steepestDrop = drop;
+            steepestDropIndex = i;
+        }
+    }
+    const weekendMaxPercent = (weekendMaxIndex / 166) * 100;
+    const dropPercent = (steepestDropIndex / 166) * 100;
+    
+    state.maxIndex = maxIndex;
+    state.minIndex = minIndex;
+    state.busiestLineIndex = busiestSingleLineIndex;
+    state.quietestLineIndex = quietestSingleLineIndex;
+    state.weekendIndex = weekendMaxIndex;
+    state.dropIndex = steepestDropIndex;
 
     // Update HTML Annotations Text
     d3.select("#marker-max")
       .style("left", `${maxPercent}%`)
-      .text(`↑ Busiest: ${maxVal.toLocaleString()} riders`);
+      .text(`↑ Busiest System Hour: ${maxVal.toLocaleString()} riders`);
 
     d3.select("#marker-min")
       .style("left", `${minPercent}%`)
-      .text(`↓ Quietest: ${minVal.toLocaleString()} riders`);
+      .text(`↓ Quietest System Hour: ${minVal.toLocaleString()} riders`)
+      .style("color", getLineColor(quietestSingleLine)); 
     
     d3.select("#marker-line-max")
       .style("left", `${lineMaxPercent}%`)
-      .text(`★ Peak Line: ${busiestSingleLine} Train (${highestLinePeak.toLocaleString()})`)
+      .text(`☆ Busiest Line: ${busiestSingleLine} Train (${highestLinePeak.toLocaleString()})`)
       .style("color", getLineColor(busiestSingleLine)); 
+
+    d3.select("#marker-line-min")
+      .style("left", `${lineMinPercent}%`)
+      .text(`☆ Quietest Line: ${quietestSingleLine} Train (${lowestLineValley.toLocaleString()})`)
+      .style("color", getLineColor(quietestSingleLine)); 
+
+      d3.select("#marker-weekend")
+      .style("left", `${weekendMaxPercent}%`)
+      .text(`☀ Weekend Peak: ${weekendMaxVal.toLocaleString()}`);
+
+    d3.select("#marker-drop")
+      .style("left", `${dropPercent}%`)
+      .text(`↘ Steepest Drop (-${steepestDrop.toLocaleString()})`);
+
 
     // Update HTML Annotations ticks
     d3.select("#tick-max").style("left", `${maxPercent}%`);
-    d3.select("#tick-min").style("left", `${minPercent}%`);
+    d3.select("#tick-min").style("left", `${minPercent}%`)
+      .style("background-color", getLineColor(quietestSingleLine));
+
     d3.select("#tick-line-max")
       .style("left", `${lineMaxPercent}%`)
       .style("background-color", getLineColor(busiestSingleLine));
-
-    // Filter out Shuttles right before drawing
-    const excludedLines = ["SIR", "ST", "SF", "SR", "FS", "GS"];
-    subwayData.features = subwayData.features.filter(route => {
-        return !excludedLines.includes(route.properties.service);
-    });
+    
+    d3.select("#tick-line-min")
+      .style("left", `${lineMinPercent}%`)
+      .style("background-color", getLineColor(quietestSingleLine));
+    d3.select("#tick-weekend")
+      .style("left", `${weekendMaxPercent}%`)
+      .style("background-color", getLineColor(busiestSingleLine));
+    d3.select("#tick-drop")
+      .style("left", `${dropPercent}%`)
+      .style("background-color", "#e67e22");
 
     console.log("System Total Riders:", systemTotalRiders);
 
@@ -209,8 +281,13 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
         .domain([0, highestLinePeak]) 
         .range(["#2ecc71", "#e74c3c"]) 
         .interpolate(d3.interpolateHcl);
-
-    console.log("Subway Data Loaded:", subwayData);
+    
+        stationHeatScale = d3.scaleLinear()
+        .domain([0, maxStationHourlyRiders]) 
+        .range(["#2ecc71", "#e74c3c"]) // Green to Red
+        .interpolate(d3.interpolateHcl);
+    
+        console.log("Subway Data Loaded:", subwayData);
     subwayLayer.selectAll(".subway-path")
         .data(subwayData.features)
         .join("path")
@@ -267,6 +344,14 @@ d3.json("final_d3_subway_data4.geojson").then(subwayData => {
             
             // Fade the tooltip out
             tooltip.transition().duration(200).style("opacity", 0);
+        })
+
+        .on("click", function(event, d) {
+            // Only trigger the deep dive if the user is currently in Scene 2
+            if (state.scene === 2) {
+                console.log(`Transitioning to Scene 3 for the ${d.properties.service} line`);
+                renderScene3(d.properties.service, d);
+            }
         });
 
         renderScene1(systemTotalRiders);
@@ -278,14 +363,19 @@ const zoom = d3.zoom()
         
         // Scale and translate the geometry
         subwayLayer.attr("transform", event.transform);
-        
+        segmentLayer.attr("transform", event.transform);
+
         // alculate the exact visual stroke width
         const targetVisualWidth = strokeScale(event.transform.k);
         const actualSvgWidth = targetVisualWidth / event.transform.k;
         
-        // Apply change to all lines
+        // Apply width changes to the background lines
         subwayLayer.selectAll(".subway-path")
                    .attr("stroke-width", actualSvgWidth);
+                   
+        // Apply width changes to the heat segments
+        segmentLayer.selectAll(".heat-segment")
+                    .attr("stroke-width", actualSvgWidth * 2);
         
         // Tile recalculation
         const currentScale = projection.scale() * 2 * Math.PI * event.transform.k;
@@ -312,7 +402,7 @@ const zoom = d3.zoom()
 
 function updateMapByHour(hourIndex, animate = true) {
     state.currentHour = parseInt(hourIndex, 10);
-    // 1. Calculate the readable day and time
+    // Calculate the readable day and time
     const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
     const day = days[Math.floor(hourIndex / 24)];
     
@@ -321,15 +411,39 @@ function updateMapByHour(hourIndex, animate = true) {
     let hour12 = hour24 % 12;
     hour12 = hour12 ? hour12 : 12; // Convert 0 to 12 for midnight/noon
 
-    // 2. Update the text labels in the sidebar
-    d3.select("#slider-day").text(day);
+    // Update the text labels in the sidebar
+    d3.select("#slider-day").text(day +  "\u00A0" );
     d3.select("#slider-time").text(hour12 + ":00 " + ampm);
-
-    // 3. Push the new color data to the renderer
-    d3.selectAll(".subway-path")
-        .transition()
-        .duration(animate? 1200: 300) 
-        .attr("stroke", d => heatScale(d.properties.hourlyTotals[hourIndex]));
+    
+    d3.select("#marker-max").classed("active", state.currentHour === state.maxIndex);
+    d3.select("#marker-min").classed("active", state.currentHour === state.minIndex);
+    d3.select("#marker-line-max").classed("active", state.currentHour === state.busiestLineIndex);
+    d3.select("#marker-line-min").classed("active", state.currentHour === state.quietestLineIndex);
+    d3.select("#marker-line").classed("active", state.currentHour === state.busiestLineIndex);
+    d3.select("#marker-weekend").classed("active", state.currentHour === state.weekendIndex);
+    d3.select("#marker-drop").classed("active", state.currentHour === state.dropIndex);
+    // Push the new color data to the renderer
+    if (state.scene === 1) {
+        d3.selectAll(".subway-path")
+            .transition()
+            .duration(animate ? 1200 : 300)
+            .attr("stroke", d => getLineColor(d.properties.service))
+            .attr("stroke-opacity", 1) 
+            .attr("stroke-width", 3);  
+            
+    } else if (state.scene === 2) {
+        d3.selectAll(".subway-path")
+            .transition()
+            .duration(animate ? 1200 : 300) 
+            .attr("stroke", d => heatScale(d.properties.hourlyTotals[hourIndex]))
+            .attr("stroke-opacity", 1)
+            .attr("stroke-width", 3);  
+    }else if (state.scene === 3) {
+        d3.selectAll(".heat-segment")
+            .transition()
+            .duration(animate ? 1200 : 300)
+            .attr("stroke", d => stationHeatScale(d.ridership[state.currentHour]));
+    }
 }
 
 
@@ -374,11 +488,21 @@ function renderScene1(weeklyRidership) {
     d3.select("#btn-scene-2").on("click", renderScene2);
 
     d3.select("#bottom-timeline").style("display", "none");
-    
+    d3.select("#time-display").style("display", "none"); 
 }
 
 function renderScene2() {
     state.scene = 2;
+    const segLayer = d3.select("#segment-layer");
+    segLayer.selectAll("*").interrupt(); 
+    segLayer.selectAll("*").remove();
+
+    // Restore full opacity and base widths to all subway lines
+    d3.selectAll(".subway-path")
+        .transition()
+        .duration(800)
+        .attr("stroke-opacity", 1)
+        .attr("stroke-width", 3);
 
     const sidebar = d3.select("#sidebar");
     
@@ -387,27 +511,20 @@ function renderScene2() {
         <div class="panel-body">
             By transitioning from standard MTA branding to a density heatmap, we can instantly identify the heaviest arteries of the network.
         </div>
-        <div style="margin-top: 30px; background-color: #111; padding: 16px; border-radius: 6px; border: 1px solid #333;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
-
-            </div>
-            
-            <input type="range" id="time-slider" min="0" max="167" value="0" style="width: 100%; cursor: pointer;">
-        </div>
 
         <div class="panel-body" style="margin-top: 24px;">
             <div style="display: flex; align-items: center; margin-bottom: 8px;">
                 <span style="display: inline-block; width: 14px; height: 14px; background-color: #e74c3c; border-radius: 50%; margin-right: 10px;"></span>
-                <span style="color: #eee;">High Volume (Max Traffic)</span>
+                <span">High Volume (Max Traffic)</span>
             </div>
             <div style="display: flex; align-items: center;">
                 <span style="display: inline-block; width: 14px; height: 14px; background-color: #2ecc71; border-radius: 50%; margin-right: 10px;"></span>
-                <span style="color: #eee;">Low Volume Routes</span>
+                <span">Low Volume Routes</span>
             </div>
         </div>
 
         <div class="panel-body" style="font-size: 13px; color: #666; margin-top: auto; border-top: 1px solid #333; padding-top: 20px;">
-            <strong>Interaction:</strong> Hover over a line to see exactly how many riders it supports.
+            <strong>Interaction:</strong> Hover over a line to see exactly how many riders it supports each hour.
         </div>
         <button class="scene-btn" id="btn-scene-1">&#8592 Back</button>
         
@@ -418,12 +535,127 @@ function renderScene2() {
 
     // Attach the event listener to the slider
     d3.select("#timeSlider").on("input", function() {
-        updateMapByHour(this.value, false);
+        updateMapByHour(this.value, true);
     });
 
     d3.select("#btn-scene-1").on("click", renderScene1);
 
     d3.select("#bottom-timeline").style("display", "block");
+    d3.select("#time-display").style("display", "block"); 
+    
+}
+
+function renderScene3(selectedTrainLetter, routeData) {
+state.scene = 3;
+    state.selectedLine = selectedTrainLetter;
+
+    // Clear any existing segments before drawing new ones
+    segmentLayer.selectAll(".heat-segment").remove();
+
+    const sidebar = d3.select("#sidebar");
+    sidebar.html(`
+        <div class="panel-title">${selectedTrainLetter} Train Heatmap</div>
+        <div class="panel-body">
+            Station-to-station volume breakdown for the ${selectedTrainLetter} line. 
+        </div>
+        <button class="scene-btn" id="btn-scene-2">&#8592 Back to Network Heatmap</button>
+    `);
+    
+    d3.select("#btn-scene-2").on("click", renderScene2);
+
+    // Fade base subway geometry into a dark ghost track
+    subwayLayer.selectAll(".subway-path")
+        .transition()
+        .duration(800)
+        .attr("stroke", d => d.properties.service === selectedTrainLetter ? "#444" : "#222")
+        .attr("stroke-opacity", d => d.properties.service === selectedTrainLetter ? 0.6 : 0.15)
+        .attr("stroke-width", d => d.properties.service === selectedTrainLetter ? 5 : 1);
+
+    // Generate Segments
+    const segments = [];
+    const unvisited = [...(routeData.properties.stations || [])];
+    const visited = [];
+
+if (unvisited.length > 0) {
+        
+        visited.push(unvisited.shift());
+
+        // Keep looping until every single station is attached to the web
+        while (unvisited.length > 0) {
+            let shortestDist = Infinity;
+            let bestVisited = null;
+            let bestUnvisitedIdx = -1;
+
+            // Find the absolute closest physical pair between the connected tree and the remaining stations
+            for (let i = 0; i < visited.length; i++) {
+                for (let j = 0; j < unvisited.length; j++) {
+                    const dx = visited[i].longitude - unvisited[j].longitude;
+                    const dy = visited[i].latitude - unvisited[j].latitude;
+                    const dist = dx * dx + dy * dy;
+
+                    if (dist < shortestDist) {
+                        shortestDist = dist;
+                        bestVisited = visited[i];
+                        bestUnvisitedIdx = j;
+                    }
+                }
+            }
+
+            // Extract that closest unvisited station
+            const target = unvisited.splice(bestUnvisitedIdx, 1)[0];
+            
+            // Set a safe distance threshold (~3 miles) to prevent missing-data hops
+            if (shortestDist < 0.003) {
+                segments.push({
+                    source: bestVisited,
+                    target: target,
+                    ridership: bestVisited.ridership, // Inherit color from the source station
+                    name: `${bestVisited.name} ↔ ${target.name}`
+                });
+            }
+            
+            // Add the newly connected station tree, allowing future stations to branch off it
+            visited.push(target);
+        }
+    }
+
+    // Line generator
+    const lineGen = d3.line()
+        .x(d => projection([d.longitude, d.latitude])[0])
+        .y(d => projection([d.longitude, d.latitude])[1]);
+
+    // Draw segment paths directly
+    segmentLayer.selectAll(".heat-segment")
+        .data(segments)
+        .join("path")
+        .attr("class", "heat-segment")
+        .attr("d", d => lineGen([d.source, d.target]))
+        .attr("stroke", d => stationHeatScale(d.ridership[state.currentHour])) // Direct initial color
+        .attr("stroke-width", 6)
+        .attr("fill", "none")
+        .attr("stroke-linecap", "round")
+        .attr("opacity", 1) 
+        .on("mouseover", function(event, d) {
+            d3.select(this).attr("stroke-width", 10).raise();
+            const currentVolume = d.ridership[state.currentHour];
+            
+            tooltip.html(`
+                <div style="font-size: 11px; text-transform: uppercase; color: #aaa;">Line Segment</div>
+                <strong>${d.name}</strong><br>
+                <div style="margin-top: 4px;">Volume: ${d3.format(",")(currentVolume)} riders</div>
+            `);
+            tooltip.transition().duration(200).style("opacity", 1);
+        })
+        .on("mousemove", function(event) {
+            tooltip.style("left", event.pageX + 15 + "px").style("top", event.pageY - 15 + "px");
+        })
+        .on("mouseout", function() {
+            d3.select(this).attr("stroke-width", 6);
+            tooltip.transition().duration(200).style("opacity", 0);
+        });
+
+    // Sync clock and UI
+    updateMapByHour(state.currentHour, false);
 }
 
 
