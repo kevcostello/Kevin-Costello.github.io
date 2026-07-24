@@ -159,7 +159,7 @@
         }
 
         .busiest-bg { background-color: #EE352E; } 
-        .quietest-bg { background-color: #0039A6; }
+        .quietest-bg { background-color: #00933C; }
         
         .marker {
             position: absolute;
@@ -176,10 +176,10 @@
             opacity: 1;
         }
 
-        .busiest { top: 0; color: #EE352E; } /* MTA Red */
-        .quietest { top: 0; color: #0039A6; } /* MTA Blue */
-        .line-peak { bottom: 0;color: #00933C; }
-        .weekend-peak { top: 0; color: #9b59b6; } /* Purple */
+        .busiest { bottom: 0; color: #EE352E; } /* MTA Red */
+        .quietest { bottom: 0; color: #00933C; } /* MTA Blue */
+        .line-peak { bottom: 0;color: #EE352E; }
+        .weekend-peak { bottom: 0; color: #f1c40f; } /* Purple */
         .steepest-drop { bottom: 0; color: #e67e22; } /* Orange */
 
         input[type="range"] {
@@ -291,6 +291,7 @@
                 </div>
 
                 <input type="range" id="timeSlider" min="0" max="166" value="0" step="1">
+                <div id="day-letters" style="position: relative; width: 100%; height:2px; margin-top: 2px; font-size: 11px; font-weight: bold; color: #888;"></div>
             </div>
         </div>
     </div>
